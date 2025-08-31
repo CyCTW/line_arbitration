@@ -75,15 +75,31 @@ fn main() -> Result<(), ArbiterError> {
 
 ## API
 
-### `Arbiter::new(num_lines: usize, unrecoverable_threshold: u64) -> Self`
-Creates a new `Arbiter`.
+### `Arbiter<T: Arbitratable>`
+The main struct that performs the arbitration. It is generic over any type `T` that implements the `Arbitratable` trait.
+
+### `Arbiter::new(num_lines: usize, unrecoverable_threshold: u64) -> Arbiter<T>`
+Creates a new `Arbiter`. The type `T` is inferred from usage.
 - `num_lines`: The total number of source lines to track.
 - `unrecoverable_threshold`: The number of messages past a gap for all lines before the gap is considered unrecoverable.
 
-### `arbiter.receive_message(&mut self, msg: Message) -> Result<Vec<Message>, ArbiterError>`
+### `arbiter.receive_message(&mut self, msg: T) -> Result<Vec<T>, ArbiterError>`
 Processes an incoming message.
-- Returns `Ok(Vec<Message>)` containing zero or more messages that are now in-order and ready for consumption.
+- `msg`: An instance of a type `T` that implements `Arbitratable`.
+- Returns `Ok(Vec<T>)` containing zero or more messages that are now in-order and ready for consumption.
 - Returns `Err(ArbiterError)` if an issue occurs.
+
+### `trait Arbitratable: Clone`
+A trait that allows your custom message types to be used with the `Arbiter`.
+
+```rust
+pub trait Arbitratable: Clone {
+    fn seq_num(&self) -> u64;
+    fn source_line(&self) -> u8;
+}
+```
+
+**Important**: To function correctly with the `Arbiter`'s internal buffer, your type's implementation of `Ord` and `PartialEq` **must** be based on the sequence number returned by `seq_num()`. The `line_arbitration::mytype::message::Message` struct provides a reference implementation.
 
 ### `ArbiterError`
 - `OutOfBoundsSourceLine`: The `source_line` on a message was greater than or equal to `num_lines`.
