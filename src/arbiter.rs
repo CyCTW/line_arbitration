@@ -1,41 +1,4 @@
-// We need to bring the Message struct into scope to use it.
-use std::{cmp::Ordering, collections::BTreeSet};
-
-/// A wrapper to provide an Ord implementation based on `seq_num()`
-/// for any type T that implements `Arbitratable`. This is an internal
-/// implementation detail of the `Arbiter`.
-#[derive(Debug, Clone)]
-struct Ordered<T: Arbitratable> {
-    inner: T,
-}
-
-impl<T: Arbitratable> Ordered<T> {
-    fn new(inner: T) -> Self {
-        Self { inner }
-    }
-}
-
-impl<T: Arbitratable> PartialEq for Ordered<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner.seq_num() == other.inner.seq_num()
-    }
-}
-
-impl<T: Arbitratable> PartialOrd for Ordered<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-// We can implement Eq manually without any bounds on T because our PartialEq
-// implementation is based on u64, which is a well-behaved equivalence relation.
-impl<T: Arbitratable> Eq for Ordered<T> {}
-
-impl<T: Arbitratable> Ord for Ordered<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.inner.seq_num().cmp(&other.inner.seq_num())
-    }
-}
+use std::collections::BTreeMap;
 
 /// A trait for messages that can be processed by the Arbiter.
 pub trait Arbitratable: Clone {
@@ -49,7 +12,7 @@ pub trait Arbitratable: Clone {
 pub struct Arbiter<T: Arbitratable> {
     latest_inorder_seq_num: u64, // Track the latest sequence number seen
     latest_seq_nums: Vec<u64>, // Track the latest sequence number seen per line
-    buffer: BTreeSet<Ordered<T>>, // Use a BTreeSet to automatically handle sorting and duplicates.
+    buffer: BTreeMap<u64, T>, // Use a BTreeMap to automatically handle sorting and prevent duplicates by sequence number.
     unrecoverable_threshold: u64, // If all lines have passed the gap over this threshold, we consider the gap as lost.
 }
 
@@ -69,7 +32,7 @@ impl<T: Arbitratable> Arbiter<T> {
         Arbiter {
             latest_inorder_seq_num: 0,
             latest_seq_nums: vec![0; num_lines],
-            buffer: BTreeSet::new(),
+            buffer: BTreeMap::new(),
             unrecoverable_threshold,
         }
     }
@@ -94,8 +57,7 @@ impl<T: Arbitratable> Arbiter<T> {
             return_messages.extend(self.process_buffer());
         } else if msg.seq_num() > self.latest_inorder_seq_num + 1 {
             // Case 2: Future message (gap detected).
-            // BTreeSet automatically handles sorting and prevents duplicates.
-            self.buffer.insert(Ordered::new(msg));
+            self.buffer.insert(msg.seq_num(), msg);
         } else {
             // Case 3: Stale or duplicate message. Discard it.
         }
@@ -110,14 +72,14 @@ impl<T: Arbitratable> Arbiter<T> {
     fn process_buffer(&mut self) -> Vec<T> {
         let mut return_messages = vec![];
 
-        while let Some(msg) = self.buffer.first() {
-            if msg.inner.seq_num() == self.latest_inorder_seq_num + 1 {
+        while let Some(kp) = self.buffer.first_entry() {
+            let msg = kp.get();
+            if msg.seq_num() == self.latest_inorder_seq_num + 1 {
                 // This message is the one we were waiting for.
-                // `BTreeSet::pop_first` is efficient.
-                // Safe to unwrap since we just checked with `first()` that it's `Some`.
-                let msg = self.buffer.pop_first().unwrap();
-                self.latest_inorder_seq_num = msg.inner.seq_num();
-                return_messages.push(msg.inner);
+                // `pop_first` is efficient and safe to unwrap since we just checked that the entry exists.
+                let (_, val) = self.buffer.pop_first().unwrap();
+                self.latest_inorder_seq_num = val.seq_num();
+                return_messages.push(val);
             } else {
                 // The next message in the buffer is not the one we need, so we stop.
                 break;
